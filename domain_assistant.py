@@ -12,7 +12,10 @@ import json
 import math
 import os
 import re
+import socket
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -21,7 +24,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError
 
 load_dotenv(Path(__file__).resolve().with_name(".env"))
 
@@ -242,27 +244,73 @@ class TextGenerator(Protocol):
     def generate(self, prompt: str) -> str: ...
 
 
-class OpenAIGenerator:
+class GeminiGenerator:
+    """Minimal Gemini REST client; avoids coupling the lab to an SDK version."""
+
     def __init__(self, max_output_tokens: int = 300) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_MODEL", "").strip()
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is missing from .env")
+        self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+        if self.api_key == "your_gemini_api_key_here":
+            self.api_key = ""
+        if not self.api_key:
+            raise RuntimeError("GEMINI_API_KEY is missing from .env")
         if not self.model:
-            raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+            raise RuntimeError("GEMINI_MODEL is missing from .env")
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-            temperature=0,
-            max_output_tokens=self.max_output_tokens,
+        endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "input": prompt,
+            }
+        ).encode("utf-8")
+        request = Request(
+            endpoint,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key,
+            },
+            method="POST",
         )
-        answer = response.output_text.strip()
+        max_retries = max(0, int(os.getenv("GEMINI_MAX_RETRIES", "5")))
+        for attempt in range(max_retries + 1):
+            try:
+                timeout = float(os.getenv("GEMINI_REQUEST_TIMEOUT", "60"))
+                with urlopen(request, timeout=timeout) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                retry_match = re.search(
+                    r"retry in\s+([0-9.]+)s", detail, flags=re.IGNORECASE
+                )
+                if exc.code == 429 and retry_match and attempt < max_retries:
+                    time.sleep(float(retry_match.group(1)) + 1.0)
+                    continue
+                raise RuntimeError(
+                    f"Gemini API request failed ({exc.code}): {detail}"
+                ) from exc
+            except URLError as exc:
+                raise RuntimeError(f"Could not reach Gemini API: {exc.reason}") from exc
+            except TimeoutError as exc:
+                raise RuntimeError("Gemini API request timed out") from exc
+            except socket.timeout as exc:
+                raise RuntimeError("Gemini API request timed out") from exc
+        else:  # defensive; the retry loop always either breaks or raises
+            raise RuntimeError("Gemini API retry loop ended without a response")
+
+        answer = "".join(
+            content.get("text", "")
+            for step in body.get("steps", [])
+            if isinstance(step, dict) and step.get("type") == "model_output"
+            for content in step.get("content", [])
+            if isinstance(content, dict)
+        ).strip()
         if not answer:
-            raise RuntimeError("OpenAI returned an empty answer")
+            raise RuntimeError("Gemini returned an empty answer")
         return answer
 
 
@@ -299,7 +347,7 @@ class DomainAssistant:
         return cls(
             corpus_id,
             BM25Retriever(chunks),
-            generator if generator is not None else OpenAIGenerator(),
+            generator if generator is not None else GeminiGenerator(),
             top_k,
         )
 
@@ -380,8 +428,9 @@ def generate_actual_answers(
     generator: TextGenerator | None = None,
     top_k: int = 5,
     progress: ProgressCallback | None = None,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Generate the auditable actual-answer artifact for all dataset questions."""
+    """Generate actual answers, optionally checkpointing after every response."""
 
     def notify(message: str) -> None:
         if progress is not None:
@@ -405,7 +454,52 @@ def generate_actual_answers(
         f"model={model}, top_k={top_k}"
     )
 
+    checkpoint = Path(checkpoint_path).expanduser().resolve() if checkpoint_path else None
+    saved_answers: dict[str, dict[str, Any]] = {}
+    if checkpoint and checkpoint.is_file():
+        try:
+            previous = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if previous.get("corpus_id") == assistant.corpus_id:
+                previous_model = previous.get("agent", {}).get("model", "unknown")
+                saved_answers = {
+                    item["id"]: item
+                    for item in previous.get("answers", [])
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+                for saved in saved_answers.values():
+                    saved.setdefault("model", previous_model)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            notify("Ignoring unreadable checkpoint and starting a fresh artifact.")
+
     answers: list[dict[str, Any]] = []
+
+    def artifact() -> dict[str, Any]:
+        return {
+            "schema_version": "1.0",
+            "corpus_id": assistant.corpus_id,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "agent": {
+                "name": "domain-assistant",
+                "model": (
+                    next(iter({item.get("model", model) for item in answers}))
+                    if len({item.get("model", model) for item in answers}) == 1
+                    else "mixed-gemini-flash"
+                ),
+                "models": sorted({item.get("model", model) for item in answers}),
+                "top_k": top_k,
+                "prompt_version": "1.0",
+            },
+            "answers": answers,
+        }
+
+    def save_checkpoint() -> None:
+        if checkpoint:
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text(
+                json.dumps(artifact(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
     for index, item in enumerate(questions, start=1):
         percentage = index / total
         completed_before = index - 1
@@ -419,6 +513,11 @@ def generate_actual_answers(
             f"{item['id']} generating: {question_preview}"
         )
 
+        if item["id"] in saved_answers:
+            answers.append(saved_answers[item["id"]])
+            notify(f"[{bar_before}] {completed_before:02d}/{total:02d} | {item['id']} reused checkpoint")
+            continue
+
         started_at = time.perf_counter()
         try:
             response = assistant.answer_with_trace(item["question"])
@@ -431,6 +530,7 @@ def generate_actual_answers(
                 "id": item["id"],
                 "question": item["question"],
                 "actual_answer": response.actual_answer,
+                "model": model,
                 "retrieved_contexts": [
                     {
                         "source_doc": chunk.source_doc,
@@ -443,6 +543,7 @@ def generate_actual_answers(
                 "error": None,
             }
         )
+        save_checkpoint()
 
         filled_after = round(20 * percentage)
         bar_after = "#" * filled_after + "-" * (20 - filled_after)
@@ -452,18 +553,7 @@ def generate_actual_answers(
             f"({elapsed:.1f}s, {len(response.retrieved_chunks)} chunks)"
         )
 
-    return {
-        "schema_version": "1.0",
-        "corpus_id": assistant.corpus_id,
-        "generated_at": datetime.now(UTC).isoformat(),
-        "agent": {
-            "name": "domain-assistant",
-            "model": model,
-            "top_k": top_k,
-            "prompt_version": "1.0",
-        },
-        "answers": answers,
-    }
+    return artifact()
 
 
 def parse_args() -> argparse.Namespace:
@@ -494,21 +584,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    output = args.output.expanduser().resolve()
     try:
         artifact = generate_actual_answers(
             args.dataset,
             args.corpus_dir,
             top_k=args.top_k,
             progress=lambda message: print(message, flush=True),
+            checkpoint_path=output,
         )
-        output = args.output.expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         print(f"Saving actual-answer artifact: {output}", flush=True)
         output.write_text(
             json.dumps(artifact, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    except (OSError, OpenAIError, TypeError, ValueError, RuntimeError) as exc:
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 2
     print(f"Generated {len(artifact['answers'])} actual answers: {output}")
