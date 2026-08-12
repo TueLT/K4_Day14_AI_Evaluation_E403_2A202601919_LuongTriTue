@@ -121,30 +121,41 @@ Randomize thứ tự câu trả lời, ẩn nguồn/model, giới hạn độ d�
 
 ### Exercise 3.4 — Framework Comparison (Bonus)
 
-So sánh được thiết kế trên **cùng 20 records** trong `golden_dataset.json` và
-**cùng outputs/chunks cố định** trong `artifacts/actual_answers.json`. Không framework
-nào được gọi lại generator; nhờ đó khác biệt điểm chỉ đến từ evaluator.
+Đã chạy thực nghiệm trên cùng một subset 5 records lấy từ bộ 20 records trong
+`golden_dataset.json`: **E01, M04, H04, A01, A03**. Hai framework nhận chính xác cùng
+question, Gemini answer và 5 ranked retrieval contexts đã đóng băng trong
+`artifacts/actual_answers.json`; không framework nào gọi lại generator. Subset có đủ
+easy, medium, hard và adversarial để kiểm tra cả câu trả lời trực tiếp lẫn safe refusal.
+
+Metric chung là **Faithfulness**, judge là `gemini-3.1-flash-lite`, temperature 0 và
+ngưỡng pass 0.5. RAGAS 0.3.9 dùng `SingleTurnSample` + `Faithfulness`; DeepEval 3.9.9
+dùng `LLMTestCase` + `FaithfulnessMetric`. Kết quả thô được lưu tại
+`artifacts/framework_comparison_results.json`.
+
+| ID | Loại | RAGAS | DeepEval | RAGAS pass | DeepEval pass |
+|---|---|---:|---:|:---:|:---:|
+| E01 | easy | 1.000 | 1.000 | Yes | Yes |
+| M04 | medium | 1.000 | 1.000 | Yes | Yes |
+| H04 | hard | .667 | 1.000 | Yes | Yes |
+| A01 | adversarial | .833 | 1.000 | Yes | Yes |
+| A03 | adversarial | 1.000 | .500 | Yes | Yes |
+| **Mean** |  | **.900** | **.900** | **5/5** | **5/5** |
+
+Hai framework đồng ý hoàn toàn ở quality-gate 0.5 và có cùng mean, nhưng không cho
+điểm giống nhau trên từng case. Chênh lệch lớn nhất là A03 (RAGAS 1.000, DeepEval
+.500), tiếp theo H04 (.667 so với 1.000). Điều này cho thấy aggregate trung bình có
+thể che khuất khác biệt trong cách judge tách claims và kiểm chứng từng claim. Với
+sample chỉ có 5 case và một lượt judge, kết quả này dùng để so sánh hành vi framework,
+không được diễn giải như benchmark thống kê tổng quát.
 
 | Tiêu chí | Framework 1: RAGAS | Framework 2: DeepEval |
 |---|---|---|
 | Setup complexity | Cần chuyển mỗi record thành question, answer, retrieved contexts và reference; thuận tiện cho batch dataset. | Tạo `LLMTestCase` cho từng record và gắn metrics; nhiều boilerplate hơn nhưng gần unit test. |
 | Metrics available | Faithfulness, Answer Relevancy, Context Recall, Context Precision; khớp trực tiếp pipeline RAG của lab. | Faithfulness, Answer Relevancy, Contextual Recall/Precision, Hallucination cùng custom GEval criteria. |
 | CI/CD integration | Chạy batch, lưu DataFrame/JSON rồi tự viết quality gate trên averages và worst cases. | Pytest-native assertions và per-case threshold nên dễ block deployment tại đúng failure ID. |
-| Cùng input dataset | 20 questions + Gemini answers + ranked chunks + expected answers cố định. | Chính xác cùng 20 inputs; không regenerate answers và dùng cùng thresholds khi metric tương ứng. |
-| Kết quả baseline dùng để đối chiếu | Local RAGAS-inspired baseline: Recall .852, Precision .944, Faithfulness .584, Relevance .572. | Protocol sẽ so per-case labels với baseline; đặc biệt kiểm tra A01, A03, H04 thay vì chỉ aggregate. |
+| Cùng input dataset | Cùng 5 frozen records, answers và ranked chunks. | Chính xác cùng 5 inputs, không regenerate answer và dùng cùng threshold. |
+| Kết quả thực đo | Mean Faithfulness .900; pass 5/5. | Mean Faithfulness .900; pass 5/5. |
 | Insight rút ra | Phù hợp chẩn đoán retrieval/generation ở cấp dataset. | Phù hợp regression gate và rubric domain-specific ở cấp test case. |
-
-**Protocol thực nghiệm:** cố định model outputs, temperature/evaluator model, metric
-threshold 0.5 và random seed; chạy mỗi framework ba lần nếu metric dùng LLM; báo cáo
-mean, standard deviation, Spearman correlation và agreement của top-3 failures.
-
-**Phân tích dự kiến:** RAGAS và DeepEval có thể nhất quán cao ở retrieval metrics vì
-dùng cùng ranked chunks, nhưng không nhất thiết nhất quán ở faithfulness/relevance do
-prompt judge khác nhau. DeepEval có thể strict hơn khi custom GEval bắt buộc đầy đủ
-deadline, exception và safety action. A01 là case calibration quan trọng: lexical
-baseline chấm thấp dù refusal đúng; semantic evaluators nên nhận diện đây là safe
-response. Hai framework được coi là tìm cùng failure khi cùng xếp case vào bottom
-quartile, không yêu cầu điểm số tuyệt đối giống nhau.
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus)
 
@@ -179,5 +190,5 @@ chunk boundaries, BM25/embedding retrieval hoặc tăng candidate top-k trước
 - [x] Exercise 3.3 có rubric 1–5 và bias controls.
 - [x] Reflection có failure analysis dựa trên artifact Gemini thật.
 - [x] Có `solution/solution.py`.
-- [x] Exercise 3.4 có framework-comparison protocol trên cùng frozen dataset.
+- [x] Exercise 3.4 đã chạy RAGAS và DeepEval thật trên cùng frozen inputs, có artifact.
 - [x] Exercise 3.5 có reranking experiment 5 case và artifact kết quả.

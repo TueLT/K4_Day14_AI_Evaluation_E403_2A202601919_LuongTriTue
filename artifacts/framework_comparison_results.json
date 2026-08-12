@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-12T17:26:15.9749700+07:00",
+  "source_dataset": "golden_dataset.json",
+  "source_answers": "artifacts/actual_answers.json",
+  "metric": "faithfulness",
+  "judge": {
+    "provider": "google_gemini",
+    "model": "gemini-3.1-flash-lite",
+    "temperature": 0
+  },
+  "threshold": 0.5,
+  "frameworks": {
+    "ragas": "0.3.9",
+    "deepeval": "3.9.9"
+  },
+  "method": "Both frameworks evaluated the same frozen question, actual answer, and five retrieved contexts for every trace. Answers were not regenerated.",
+  "results": [
+    {
+      "id": "E01",
+      "difficulty": "easy",
+      "ragas_faithfulness": 1.0,
+      "deepeval_faithfulness": 1.0,
+      "ragas_pass": true,
+      "deepeval_pass": true
+    },
+    {
+      "id": "M04",
+      "difficulty": "medium",
+      "ragas_faithfulness": 1.0,
+      "deepeval_faithfulness": 1.0,
+      "ragas_pass": true,
+      "deepeval_pass": true
+    },
+    {
+      "id": "H04",
+      "difficulty": "hard",
+      "ragas_faithfulness": 0.666667,
+      "deepeval_faithfulness": 1.0,
+      "ragas_pass": true,
+      "deepeval_pass": true
+    },
+    {
+      "id": "A01",
+      "difficulty": "adversarial",
+      "ragas_faithfulness": 0.833333,
+      "deepeval_faithfulness": 1.0,
+      "ragas_pass": true,
+      "deepeval_pass": true
+    },
+    {
+      "id": "A03",
+      "difficulty": "adversarial",
+      "ragas_faithfulness": 1.0,
+      "deepeval_faithfulness": 0.5,
+      "ragas_pass": true,
+      "deepeval_pass": true
+    }
+  ],
+  "summary": {
+    "sample_count": 5,
+    "ragas_mean_faithfulness": 0.9,
+    "deepeval_mean_faithfulness": 0.9,
+    "ragas_pass_count": 5,
+    "deepeval_pass_count": 5,
+    "threshold_agreement_count": 5
+  },
+  "limitations": [
+    "The comparison uses a five-record stratified subset rather than all 20 records.",
+    "Each LLM-as-judge framework was run once, so run-to-run variance was not estimated."
+  ]
+}
