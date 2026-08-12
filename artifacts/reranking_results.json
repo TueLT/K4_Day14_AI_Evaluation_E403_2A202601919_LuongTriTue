@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "method": "rerank_by_overlap(question)",
+  "invariant": "same retrieved chunks before and after",
+  "results": [
+    {"id": "H03", "recall_before": 0.944, "recall_after": 0.944, "precision_before": 0.804, "precision_after": 0.887, "delta_precision": 0.083},
+    {"id": "M01", "recall_before": 1.000, "recall_after": 1.000, "precision_before": 0.887, "precision_after": 0.950, "delta_precision": 0.062},
+    {"id": "M06", "recall_before": 0.842, "recall_after": 0.842, "precision_before": 0.700, "precision_after": 0.756, "delta_precision": 0.056},
+    {"id": "M04", "recall_before": 1.000, "recall_after": 1.000, "precision_before": 0.950, "precision_after": 1.000, "delta_precision": 0.050},
+    {"id": "H01", "recall_before": 0.786, "recall_after": 0.786, "precision_before": 0.950, "precision_after": 0.950, "delta_precision": 0.000}
+  ],
+  "averages": {
+    "recall_before": 0.914,
+    "recall_after": 0.914,
+    "precision_before": 0.858,
+    "precision_after": 0.909,
+    "delta_precision": 0.050
+  }
+}

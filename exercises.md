@@ -121,11 +121,54 @@ Randomize thứ tự câu trả lời, ẩn nguồn/model, giới hạn độ d�
 
 ### Exercise 3.4 — Framework Comparison (Bonus)
 
-Thiết kế so sánh: RAGAS mạnh về RAG metrics offline; DeepEval phù hợp assertion pytest/CI. Chỉ chạy và điền số liệu sau khi có actual answers thật, để hai framework dùng cùng dataset và cùng outputs.
+So sánh được thiết kế trên **cùng 20 records** trong `golden_dataset.json` và
+**cùng outputs/chunks cố định** trong `artifacts/actual_answers.json`. Không framework
+nào được gọi lại generator; nhờ đó khác biệt điểm chỉ đến từ evaluator.
+
+| Tiêu chí | Framework 1: RAGAS | Framework 2: DeepEval |
+|---|---|---|
+| Setup complexity | Cần chuyển mỗi record thành question, answer, retrieved contexts và reference; thuận tiện cho batch dataset. | Tạo `LLMTestCase` cho từng record và gắn metrics; nhiều boilerplate hơn nhưng gần unit test. |
+| Metrics available | Faithfulness, Answer Relevancy, Context Recall, Context Precision; khớp trực tiếp pipeline RAG của lab. | Faithfulness, Answer Relevancy, Contextual Recall/Precision, Hallucination cùng custom GEval criteria. |
+| CI/CD integration | Chạy batch, lưu DataFrame/JSON rồi tự viết quality gate trên averages và worst cases. | Pytest-native assertions và per-case threshold nên dễ block deployment tại đúng failure ID. |
+| Cùng input dataset | 20 questions + Gemini answers + ranked chunks + expected answers cố định. | Chính xác cùng 20 inputs; không regenerate answers và dùng cùng thresholds khi metric tương ứng. |
+| Kết quả baseline dùng để đối chiếu | Local RAGAS-inspired baseline: Recall .852, Precision .944, Faithfulness .584, Relevance .572. | Protocol sẽ so per-case labels với baseline; đặc biệt kiểm tra A01, A03, H04 thay vì chỉ aggregate. |
+| Insight rút ra | Phù hợp chẩn đoán retrieval/generation ở cấp dataset. | Phù hợp regression gate và rubric domain-specific ở cấp test case. |
+
+**Protocol thực nghiệm:** cố định model outputs, temperature/evaluator model, metric
+threshold 0.5 và random seed; chạy mỗi framework ba lần nếu metric dùng LLM; báo cáo
+mean, standard deviation, Spearman correlation và agreement của top-3 failures.
+
+**Phân tích dự kiến:** RAGAS và DeepEval có thể nhất quán cao ở retrieval metrics vì
+dùng cùng ranked chunks, nhưng không nhất thiết nhất quán ở faithfulness/relevance do
+prompt judge khác nhau. DeepEval có thể strict hơn khi custom GEval bắt buộc đầy đủ
+deadline, exception và safety action. A01 là case calibration quan trọng: lexical
+baseline chấm thấp dù refusal đúng; semantic evaluators nên nhận diện đây là safe
+response. Hai framework được coi là tìm cùng failure khi cùng xếp case vào bottom
+quartile, không yêu cầu điểm số tuyệt đối giống nhau.
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus)
 
-`rerank_by_overlap()` đã được implement. Recall dự kiến không đổi vì tập chunks không đổi; Context Precision có thể tăng khi evidence liên quan được đưa lên trước noise. Nếu không có chunk chứa evidence thì reranking không đủ: cần sửa query expansion, chunking, embedding/BM25 weighting hoặc top-k.
+Đã chạy `rerank_by_overlap()` trên đúng retrieved set trong artifact; không thêm hoặc
+xóa chunk. Reranker dùng overlap với question, sau đó hai retrieval metrics được tính
+lại với cùng expected answer.
+
+| ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
+|---|---:|---:|---:|---:|---:|
+| H03 | .944 | .944 | .804 | .887 | +.083 |
+| M01 | 1.000 | 1.000 | .887 | .950 | +.062 |
+| M06 | .842 | .842 | .700 | .756 | +.056 |
+| M04 | 1.000 | 1.000 | .950 | 1.000 | +.050 |
+| H01 | .786 | .786 | .950 | .950 | +.000 |
+| **Avg** | **.914** | **.914** | **.858** | **.909** | **+.050** |
+
+Recall không đổi vì metric dùng union tokens của cùng tập chunks, nên permutation
+không thể thêm hoặc làm mất evidence. Precision tăng ở 4/5 case vì relevant chunks
+được đưa lên sớm hơn; H01 không đổi vì ranking ban đầu đã gần tối ưu.
+
+Reranking không đủ khi evidence cần thiết hoàn toàn vắng khỏi top-k (ví dụ H04 thiếu
+paragraph về prepaid return label), query không chứa từ nối tới policy cần thiết, hoặc
+chunking tách condition khỏi exception. Khi đó phải sửa query decomposition/expansion,
+chunk boundaries, BM25/embedding retrieval hoặc tăng candidate top-k trước rerank.
 
 ## Completion Checklist
 
@@ -136,3 +179,5 @@ Thiết kế so sánh: RAGAS mạnh về RAG metrics offline; DeepEval phù hợ
 - [x] Exercise 3.3 có rubric 1–5 và bias controls.
 - [x] Reflection có failure analysis dựa trên artifact Gemini thật.
 - [x] Có `solution/solution.py`.
+- [x] Exercise 3.4 có framework-comparison protocol trên cùng frozen dataset.
+- [x] Exercise 3.5 có reranking experiment 5 case và artifact kết quả.
